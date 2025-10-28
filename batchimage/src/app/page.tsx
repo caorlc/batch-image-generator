@@ -11,6 +11,7 @@ import {
   Palette,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,17 +29,16 @@ const TEXT_IMAGE_MODELS = [
 ];
 
 const STYLE_MODELS = [
-  { label: "Seedream 4.0", value: "seedream-4.0" },
-  { label: "Seedream 3.0", value: "seedream-3.0" },
-  { label: "Seedream Lite", value: "seedream-lite" },
+  { label: "Gemini 2.5 Flash Image", value: "gemini-2.5-flash-image" },
+  { label: "Doubao Seedance", value: "doubao-seedance" },
+  { label: "GPT-Image-1", value: "gpt-image-1" },
 ];
 
 const DEFAULT_CORE_PROMPT =
-  "Art Style: Strictly pure black and white line art, bold outlines, no shading.\nResolution: 1024 x 1024.\nRestrictions: child-friendly scenes, simple backgrounds.";
+  "prompt: Create [1] coloring pages of [godzilla], [summer time].\nCore Requirements:\nArt Style: Strictly pure black and white line art. Use ONLY solid black and pure white.\nAbsolute Prohibition: No gray, no shades, no gradients, no gray fills, no shadows, no textures. Solid pure white background. yellow tint, yellow spots, dots, noise, grain, texture, shadows, shading, gradients, color, gray, smudges, dirty background, blurry lines\nLine Quality: Thick, continuous, unbroken black lines. High contrast. Suitable for children's coloring.\nContent: Simple, engaging scenes. Large, distinct areas. Minimal fine details. Focus on the character";
 
 type GenerationStage =
   | "idle"
-  | "generating-scenes"
   | "scenes-ready"
   | "generating-images"
   | "ready"
@@ -50,6 +50,8 @@ interface UploadItem {
   file: File;
   previewUrl: string;
 }
+
+const PLACEHOLDER_REGEX = /\[([^\]]+)\]/g;
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<GenerationMode>("text");
@@ -69,9 +71,18 @@ export default function HomePage() {
   const [scenarios, setScenarios] = useState<string[]>([]);
   const [stage, setStage] = useState<GenerationStage>("idle");
   const [images, setImages] = useState<GeneratedImage[]>([]);
+  const [previewImage, setPreviewImage] = useState<GeneratedImage | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+
+  const [placeholderKeys, setPlaceholderKeys] = useState<string[]>([]);
+  const [placeholderValues, setPlaceholderValues] = usePersistentState<Record<string, string>>(
+    "batch-placeholder-values",
+    {}
+  );
+  const [scenarioPlaceholder, setScenarioPlaceholder] = useState<string | null>(null);
+  const [subjectPlaceholder, setSubjectPlaceholder] = useState<string | null>(null);
 
   useEffect(() => {
     setIsMounted(true);
@@ -84,79 +95,204 @@ export default function HomePage() {
   }, [uploads]);
 
   useEffect(() => {
-    // 切换到风格模式时清空场景确认阶段
+    if (!previewImage) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPreviewImage(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [previewImage]);
+
+  useEffect(() => {
+    const matches = Array.from(corePrompt.matchAll(PLACEHOLDER_REGEX)).map((match) =>
+      match[1].trim()
+    );
+    const unique = Array.from(new Set(matches));
+    setPlaceholderKeys(unique);
+
+    setPlaceholderValues((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+
+      unique.forEach((key) => {
+        let value = prev[key];
+        if (key === "1") {
+          value = String(quantity);
+        } else if (value === undefined) {
+          if (key.toLowerCase().includes("subject") || key.toLowerCase() === subject.toLowerCase()) {
+            value = subject;
+          } else {
+            value = "";
+          }
+        }
+        next[key] = value ?? "";
+        if (prev[key] !== next[key]) {
+          changed = true;
+        }
+      });
+
+      if (Object.keys(prev).length !== unique.length) {
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+
+    const normalizedSubject = subject.toLowerCase();
+    const candidateSubject =
+      unique.find((key) => key.toLowerCase().includes("subject")) ??
+      unique.find((key) => key.toLowerCase() === normalizedSubject) ??
+      null;
+
+    setSubjectPlaceholder((prevKey) => {
+      if (prevKey && unique.includes(prevKey)) {
+        return prevKey;
+      }
+      return candidateSubject;
+    });
+
+    setScenarioPlaceholder((prevKey) => {
+      if (prevKey && unique.includes(prevKey)) {
+        return prevKey;
+      }
+      return null;
+    });
+  }, [corePrompt, subject, quantity, setPlaceholderValues]);
+
+  useEffect(() => {
+    if (!subjectPlaceholder) return;
+    setPlaceholderValues((prev) => {
+      if (prev[subjectPlaceholder] === subject) {
+        return prev;
+      }
+      return { ...prev, [subjectPlaceholder]: subject };
+    });
+  }, [subject, subjectPlaceholder, setPlaceholderValues]);
+
+  useEffect(() => {
+    setPlaceholderValues((prev) => {
+      if (prev["1"] === undefined) {
+        return prev;
+      }
+      const value = String(quantity);
+      if (prev["1"] === value) {
+        return prev;
+      }
+      return { ...prev, "1": value };
+    });
+  }, [quantity, setPlaceholderValues]);
+
+  useEffect(() => {
     if (activeTab === "style") {
       setScenarios([]);
-      if (stage === "scenes-ready" || stage === "generating-scenes") {
+      if (stage === "scenes-ready") {
         setStage("idle");
       }
     }
   }, [activeTab, stage]);
+
+  const scenarioSeedValue = scenarioPlaceholder
+    ? placeholderValues[scenarioPlaceholder] ?? ""
+    : "";
+
+  const scenarioLines = useMemo(() => {
+    if (!scenarioPlaceholder) return [] as string[];
+    return scenarioSeedValue
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }, [scenarioPlaceholder, scenarioSeedValue]);
+
+  const placeholderMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    placeholderKeys.forEach((key) => {
+      map[key] = placeholderValues[key]?.trim() ?? "";
+    });
+    if (subjectPlaceholder) {
+      map[subjectPlaceholder] = subject;
+    }
+    const effectiveQuantity = scenarioLines.length > 0 ? scenarioLines.length : quantity;
+    map["1"] = String(effectiveQuantity);
+    return map;
+  }, [placeholderKeys, placeholderValues, subjectPlaceholder, subject, scenarioLines.length, quantity]);
 
   const selectedImages = useMemo(
     () => images.filter((image) => selectedIds.includes(image.id)),
     [images, selectedIds]
   );
 
+  const placeholdersFilled = useMemo(() => {
+    return placeholderKeys.every((key) => {
+      if (key === "1") return true;
+      if (key === subjectPlaceholder) return Boolean(subject.trim());
+      if (key === scenarioPlaceholder) return scenarioLines.length > 0;
+      return Boolean(placeholderValues[key]?.trim());
+    });
+  }, [placeholderKeys, placeholderValues, subject, subjectPlaceholder, scenarioPlaceholder, scenarioLines.length]);
+
+  const isBusy = stage === "generating-images" || stage === "compressing";
+
   const generationDisabled =
     activeTab === "text"
-      ? !subject.trim() || !corePrompt.trim()
-      : uploads.length === 0 || !stylePrompt.trim();
-
-  const isBusy =
-    stage === "generating-scenes" ||
-    stage === "generating-images" ||
-    stage === "compressing";
+      ? !subject.trim() ||
+        !corePrompt.trim() ||
+        !scenarioPlaceholder ||
+        scenarioLines.length === 0 ||
+        !placeholdersFilled ||
+        isBusy
+      : uploads.length === 0 || !stylePrompt.trim() || isBusy;
 
   const hasCompressedResults =
     stage === "compressed" && images.some((img) => Boolean(img.compressedUrl));
 
   async function handleGenerate() {
-    if (generationDisabled || isBusy) return;
+    if (generationDisabled) return;
     setError(null);
     setImages([]);
     setSelectedIds([]);
+    setPreviewImage(null);
 
     if (activeTab === "text") {
-      setStage("generating-scenes");
-      setScenarios([]);
-      try {
-        const response = await fetch("/api/text-scenarios", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ subject, quantity, corePrompt }),
-        });
-
-        if (!response.ok) {
-          throw new Error(await response.text());
-        }
-
-        const data = (await response.json()) as { scenarios: string[] };
-        setScenarios(data.scenarios);
-        setStage("scenes-ready");
-      } catch (err) {
-        console.error(err);
-        setStage("idle");
-        setError(err instanceof Error ? err.message : "生成场景失败，请稍后重试。");
+      if (!scenarioPlaceholder) {
+        setError("请先在占位符列表中选择用于生成场景的占位符");
+        return;
       }
-    } else {
-      setStage("generating-images");
-      setScenarios([]);
-      try {
-        const generated = await runStyleTransfer();
-        setImages(generated);
-        setSelectedIds(generated.map((image) => image.id));
-        setStage("ready");
-      } catch (err) {
-        console.error(err);
-        setStage("idle");
-        setError(err instanceof Error ? err.message : "风格转换失败，请稍后再试。");
+      if (scenarioLines.length === 0) {
+        setError("请在对应占位符中按行填写至少一个场景主题");
+        return;
       }
+
+      setScenarios(scenarioLines);
+      setStage("scenes-ready");
+      return;
+    }
+
+    setStage("generating-images");
+    setScenarios([]);
+    try {
+      const generated = await runStyleTransfer();
+      setImages(generated);
+      setSelectedIds(generated.map((image) => image.id));
+      setStage("ready");
+    } catch (err) {
+      console.error(err);
+      setStage("idle");
+      setError(err instanceof Error ? err.message : "风格转换失败，请稍后再试。");
     }
   }
 
   async function handleConfirmScenes() {
-    if (!scenarios.length) return;
+    if (!scenarios.length || !scenarioPlaceholder) return;
     try {
       setStage("generating-images");
       const generated = await runTextImageGeneration(scenarios);
@@ -171,6 +307,7 @@ export default function HomePage() {
   }
 
   async function runTextImageGeneration(scenariosToUse: string[]) {
+    const effectiveQuantity = scenariosToUse.length > 0 ? scenariosToUse.length : quantity;
     const response = await fetch("/api/text-to-image", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -179,6 +316,10 @@ export default function HomePage() {
         model: textModel,
         corePrompt,
         scenarios: scenariosToUse,
+        placeholders: placeholderMap,
+        scenarioPlaceholder,
+        subjectPlaceholder,
+        quantity: effectiveQuantity,
       }),
     });
 
@@ -272,6 +413,13 @@ export default function HomePage() {
     });
   }
 
+  function handlePlaceholderValueChange(key: string, value: string) {
+    setPlaceholderValues((prev) => {
+      if (prev[key] === value) return prev;
+      return { ...prev, [key]: value };
+    });
+  }
+
   if (!isMounted) {
     return null;
   }
@@ -323,7 +471,7 @@ export default function HomePage() {
                   <label className="text-sm font-semibold text-slate-700">主题 (Subject)</label>
                   <Input
                     value={subject}
-                    placeholder="请输入核心对象，例如 godzilla"
+                    placeholder="请输入核心对象，例如 labubu"
                     onChange={(event) => setSubject(event.target.value)}
                     disabled={isBusy}
                   />
@@ -355,13 +503,107 @@ export default function HomePage() {
                       disabled={isBusy}
                       className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 shadow-sm focus:border-blue-500"
                     >
-                      {TEXT_IMAGE_MODELS.map((model) => (
-                        <option key={model.value} value={model.value}>
-                          {model.label}
+                      {TEXT_IMAGE_MODELS.map((modelItem) => (
+                        <option key={modelItem.value} value={modelItem.value}>
+                          {modelItem.label}
                         </option>
                       ))}
                     </select>
                     <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">▾</span>
+                  </div>
+                </div>
+                <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-slate-700">占位符配置</p>
+                    <span className="text-xs text-slate-500">识别核心 Prompt 中的 [变量]</span>
+                  </div>
+                  <div className="space-y-4">
+                    {placeholderKeys.length === 0 && (
+                      <p className="text-xs text-slate-400">
+                        当前 Prompt 未检测到任何占位符。
+                      </p>
+                    )}
+                    {placeholderKeys.map((key) => {
+                      if (key === "1") {
+                        return (
+                          <div
+                            key={key}
+                            className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold text-slate-700">[{key}]</span>
+                              <span className="text-xs text-slate-400">自动替换为生成数量</span>
+                            </div>
+                            <div className="mt-1 text-slate-500">当前值：{quantity}</div>
+                          </div>
+                        );
+                      }
+
+                      const value = placeholderValues[key] ?? "";
+                      const isSubject = key === subjectPlaceholder;
+                      const isScenario = key === scenarioPlaceholder;
+
+                      return (
+                        <div
+                          key={key}
+                          className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <label className="text-sm font-semibold text-slate-700">
+                              [{key}]
+                              {isSubject && (
+                                <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-600">
+                                  主题占位
+                                </span>
+                              )}
+                              {isScenario && (
+                                <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-600">
+                                  场景占位
+                                </span>
+                              )}
+                            </label>
+                            {!isSubject && (
+                              <label className="flex items-center gap-1 text-xs text-slate-500">
+                                <input
+                                  type="radio"
+                                  name="scenario-placeholder"
+                                  checked={isScenario}
+                                  onChange={() => setScenarioPlaceholder(key)}
+                                />
+                                用作场景生成
+                              </label>
+                            )}
+                          </div>
+                          {isScenario ? (
+                            <Textarea
+                              value={value}
+                              rows={Math.max(3, value.split("\n").length)}
+                              onChange={(event) => handlePlaceholderValueChange(key, event.target.value)}
+                              placeholder="请按行输入场景，每行一个短语，例如：summer carnival"
+                              disabled={isBusy}
+                            />
+                          ) : (
+                            <Input
+                              value={value}
+                              onChange={(event) => handlePlaceholderValueChange(key, event.target.value)}
+                              placeholder="请输入占位符对应的内容"
+                              disabled={isBusy && key !== subjectPlaceholder}
+                            />
+                          )}
+                          {isSubject && (
+                            <p className="mt-1 text-xs text-slate-400">此处会在生成时与主题保持同步，若需修改主题请在上方“主题 (Subject)”中编辑。</p>
+                          )}
+                          {isScenario && (
+                            <p className="mt-1 text-xs text-slate-400">
+                              系统会按行拆分内容，每行作为一个场景依次生成图片。
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {scenarioPlaceholder === null && placeholderKeys.length > 0 && (
+                      <p className="text-xs text-rose-500">请选择一个占位符用于生成场景。</p>
+                    )}
                   </div>
                 </div>
                 <div>
@@ -432,9 +674,9 @@ export default function HomePage() {
                       disabled={isBusy}
                       className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 shadow-sm focus:border-blue-500"
                     >
-                      {STYLE_MODELS.map((model) => (
-                        <option key={model.value} value={model.value}>
-                          {model.label}
+                      {STYLE_MODELS.map((modelItem) => (
+                        <option key={modelItem.value} value={modelItem.value}>
+                          {modelItem.label}
                         </option>
                       ))}
                     </select>
@@ -454,8 +696,14 @@ export default function HomePage() {
               </div>
             )}
             <div className="mt-6">
-              <Button onClick={handleGenerate} disabled={generationDisabled || isBusy} className="h-12 w-full gap-2 text-base">
-                {isBusy && <Loader2 className="h-4 w-4 animate-spin" />}
+              <Button
+                onClick={handleGenerate}
+                disabled={generationDisabled}
+                className="h-12 w-full gap-2 text-base"
+              >
+                {(isBusy) && (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                )}
                 {activeTab === "text" ? `开始生成 (${quantity} 张)` : `开始转换 (${uploads.length} 张)`}
               </Button>
               {error && <p className="mt-3 text-sm text-rose-500">{error}</p>}
@@ -513,19 +761,12 @@ export default function HomePage() {
               </div>
             )}
 
-            {stage === "generating-scenes" && (
-              <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-blue-50/80 p-4 text-sm text-blue-800">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                正在调用 Gemini 2.5 Flash 生成场景，请稍候…
-              </div>
-            )}
-
             {stage === "scenes-ready" && (
               <div className="space-y-4 rounded-2xl border border-blue-200 bg-blue-50/80 p-6 text-sm text-blue-900">
                 <div>
                   <p className="font-semibold">场景确认</p>
                   <p className="mt-1 text-blue-800/80">
-                    请确认以下 {scenarios.length} 个场景描述，确认后系统将逐条调用所选图片模型生成图片。
+                    以下内容来自占位符输入，请确认 {scenarios.length} 个场景描述后系统将逐条调用所选图片模型生成图片。
                   </p>
                 </div>
                 <ol className="list-decimal space-y-2 pl-5 text-left">
@@ -563,16 +804,24 @@ export default function HomePage() {
                       key={image.id}
                       className="group relative overflow-hidden rounded-2xl border border-slate-100 bg-slate-50 shadow-sm"
                     >
-                      <div className="relative h-48 w-full overflow-hidden bg-black/5">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewImage(image)}
+                        title="点击放大预览"
+                        className="group/image relative h-48 w-full cursor-zoom-in overflow-hidden bg-black/5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                      >
                         <Image
                           src={image.compressedUrl || image.previewUrl}
                           alt={image.promptSummary}
                           fill
                           sizes="(min-width: 1024px) 240px, 100vw"
-                          className="object-cover transition group-hover:scale-[1.02]"
+                          className="object-cover transition group-hover/image:scale-[1.02]"
                           unoptimized
                         />
-                      </div>
+                        <span className="pointer-events-none absolute inset-0 hidden items-center justify-center bg-black/30 text-xs font-medium tracking-wide text-white group-hover/image:flex">
+                          点击放大预览
+                        </span>
+                      </button>
                       <div className="flex items-start justify-between gap-3 p-4">
                         <div>
                           <p className="text-sm font-semibold text-slate-800">{image.model}</p>
@@ -653,16 +902,24 @@ export default function HomePage() {
                       key={`compressed-${image.id}`}
                       className="overflow-hidden rounded-2xl border border-slate-100 bg-slate-50 shadow-sm"
                     >
-                      <div className="relative h-40 w-full overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewImage(image)}
+                        title="点击放大预览"
+                        className="group/image relative h-40 w-full cursor-zoom-in overflow-hidden bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                      >
                         <Image
                           src={image.compressedUrl!}
                           alt={image.promptSummary}
                           fill
                           sizes="(min-width: 1024px) 220px, 100vw"
-                          className="object-cover"
+                          className="object-cover transition group-hover/image:scale-[1.02]"
                           unoptimized
                         />
-                      </div>
+                        <span className="pointer-events-none absolute inset-0 hidden items-center justify-center bg-black/30 text-xs font-medium tracking-wide text-white group-hover/image:flex">
+                          点击放大预览
+                        </span>
+                      </button>
                       <div className="flex items-center justify-between p-3 text-xs text-slate-600">
                         <span className="truncate">{image.model}</span>
                         <Button
@@ -697,6 +954,44 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6 py-12"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="absolute inset-0"
+            onClick={() => setPreviewImage(null)}
+            aria-hidden="true"
+          />
+          <div className="relative z-10 w-full max-w-5xl rounded-3xl bg-white p-6 shadow-2xl">
+            <button
+              type="button"
+              onClick={() => setPreviewImage(null)}
+              className="absolute right-6 top-6 rounded-full border border-slate-200 bg-white/80 p-2 text-slate-500 shadow-sm transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+              aria-label="关闭预览"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <div className="relative aspect-square w-full overflow-hidden rounded-2xl bg-slate-100">
+              <Image
+                src={previewImage.compressedUrl || previewImage.previewUrl}
+                alt={previewImage.promptSummary}
+                fill
+                sizes="(min-width: 1024px) 800px, 100vw"
+                className="object-contain"
+                unoptimized
+              />
+            </div>
+            <div className="mt-5 space-y-2 text-sm text-slate-600">
+              <p className="font-semibold text-slate-800">{previewImage.model}</p>
+              {previewImage.scenario && <p className="text-slate-500">{previewImage.scenario}</p>}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

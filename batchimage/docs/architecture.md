@@ -6,20 +6,21 @@
 - **State Strategy**:
   - Local component state (React hooks) for transient form data & status flags.
   - `usePersistentState` hook abstracts LocalStorage sync for `subject`, `corePrompt`, `stylePrompt`.
-  - 以 React hooks (`useState`, `useMemo`) 管理阶段状态：Idle → GeneratingScenes → ScenesReady → GeneratingImages → Ready → Compressing → Compressed。
+  - 以 React hooks (`useState`, `useMemo`) 管理阶段状态：Idle → ScenesReady → GeneratingImages → Ready → Compressing → Compressed。
 - **Data Contracts**: unified `GeneratedImage` interface with `id`, `previewUrl`, `compressedUrl`, `sourceScenario`, `sourceUploadName`, `status`.
 
 ## 2. UI Flow Per Mode
 1. **Stage 1 – 参数配置**
-   - Text mode: [`Subject`, `Quantity (1-20)`, `Model`, `Core Prompt`].
+   - Text mode: [`Subject`, `Quantity (1-20)`, `Model`, `Core Prompt`, `Placeholder Panel`].
+     - 自动解析 `[...]` 占位符，用户逐一填入值，并手动指定哪一个占位符用于场景生成；选定占位符时可按行输入多个场景短语。
    - Style mode: [`Uploads[]`, `Model`, `Style Prompt`].
    - `StartButton` derives CTA label (`开始生成 (X张)` / `开始转换 (X张)`).
    - Inputs disabled while downstream stages run.
 2. **Stage 2 – 系统生成**
-   - Text mode: `POST /api/text-scenarios` 调用 Gemini 2.5 Flash（nano-banana）输出场景列表，前端展示并等待用户确认；确认后再调用 `POST /api/text-to-image`，按场景顺序逐张生成。
-   - Style mode: 客户端上传文件后调用 `POST /api/style-transfer`，服务器端顺序对每个文件执行图生图。
+   - Text mode: 用户在占位符输入框中按行写入需要的场景短语，点击“开始生成”后先呈现确认列表，再调用 `POST /api/text-to-image` 逐条生成。
+   - Style mode: 上传文件后调用 `POST /api/style-transfer`：Doubao/Seedream 走官方接口，GPT-Image-1 调用 `images/edits` 进行风格化。Gemini 暂不支持图生图。
 3. **Stage 3 – 结果筛选**
-   - 网格展示所有生成结果，可复选勾选满意图片，整体计数展示在摘要条。
+   - 网格展示所有生成结果，可复选勾选满意图片并点击缩略图进入全屏预览，整体计数展示在摘要条。
    - 在未压缩状态下提供“确认并压缩已选项”按钮。
 4. **Stage 4 – 压缩与下载**
    - `POST /api/compress` receives selected image URLs/base64, calls TinyPNG, responds with compressed URLs/blobs.
@@ -28,38 +29,35 @@
 ## 3. Backend Modules (Next.js Route Handlers)
 ```
 src/
-├── app/api/text-scenarios/route.ts  # Gemini 2.5 Flash（nano-banana）生成场景
-├── app/api/text-to-image/route.ts   # GPT-4o 等模型根据场景批量生图
+├── app/api/text-to-image/route.ts   # 调用指定图片模型批量生图
 ├── app/api/style-transfer/route.ts  # Seedream 图生图
 ├── app/api/compress/route.ts        # TinyPNG 压缩
 ├── app/api/proxy-image/route.ts     # 代理远程图片下载
 └── lib/services/
-    ├── nanoBananaClient.ts
     ├── gptImageClient.ts
     ├── seedreamClient.ts
     └── tinyPngClient.ts
 ```
-- Service layer normalizes request payloads, hides provider-specific formats, and throws typed errors consumed by API routes.
+- Service layer normalizes request payloads, hides provider-specific formats, and throws typed errors consumed by API routes。
 - API routes **never** persist data; they stream-progress results via `ReadableStream` to keep UI responsive.
 
 ## 4. External API Strategy
 | Purpose | Model / Provider | Env Vars | Notes |
 |---------|------------------|----------|-------|
-| Scene text generation | Gemini 2.5 Flash (nano-banana) | `TUZI_API_KEY`, `TUZI_API_BASE` (fallback至旧变量) | 通过 OpenAI Responses API，生成场景列表供确认。|
-| Text→Image | `gemini-2.5-flash-image` / `gpt-image-1` / `doubao-seedance-1-0-pro-250528` | 同上 | `images.generate` 单张调用，按场景顺序串行。|
-| Img→Img | Seedream 3/4 | 同上 | `POST /v1/images/generations`，上传图像 base64。|
-| Compression | TinyPNG | `TINIFY_API_KEY` | `https://api.tinify.com/shrink` 顺序压缩。|
+| Text→Image | `gemini-2.5-flash-image` / `gpt-image-1` / `doubao-seedance` | `TUZI_API_KEY`, `TUZI_API_BASE` | Gemini/GPT 走 OpenAI SDK；Doubao 使用 `/v1/images/generations` 原生接口，结果按场景依次生成。|
+| Img→Img | Seedream 3/4 | `TUZI_API_KEY`, `TUZI_API_BASE` | `POST /v1/images/generations`，上传图像 base64。|
+| Compression | TinyPNG | `TINIFY_API_KEY` | `https://api.tinify.com/shrink` + `/convert` 输出 WebP。|
 
 Fallback mechanism: if env is missing, services return deterministic mock payloads (flagged in logs) so UI remains testable offline.
 
 ## 5. Download / Storage
-- Generated images stored as data URLs in memory; when provider responds with remote URLs, app proxies via `/api/proxy-image?url=...` to circumvent CORS when building ZIP.
+- Generated images stored as data URLs in memory; when provider responds with remote URLs, app proxies via `/api/proxy-image?url=...` to circumvent CORS when building ZIP。
 - `全部下载` uses `JSZip` client-side to bundle currently selected compressed images.
 
 ## 6. Error Handling & UX
 - `useState` 状态跟踪错误信息并在 CTA 区域以文本提示。
 - 异步处理中禁用按钮并显示 loading。
-- 卡片状态标签展示生成/压缩进展，服务器错误会写入 `console.error`。
+- 卡片状态标签展示生成/压缩进展，支持缩略图点击放大；服务器错误会写入 `console.error`。
 
 ## 7. Non-Functional Guarantees
 - Pure front-end storage; all uploads handled via `File` blobs processed in-browser before streaming to API routes. No persistence on disk/server beyond request lifetime.

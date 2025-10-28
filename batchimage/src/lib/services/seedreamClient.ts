@@ -3,10 +3,12 @@ import { lookup as lookupMime } from "mime-types";
 
 const apiKey =
   process.env.TUZI_API_KEY ?? process.env.SEEDREAM_API_KEY ?? "";
-const baseURL =
+const rawBaseURL =
   process.env.TUZI_API_BASE ??
   process.env.SEEDREAM_API_BASE ??
   "https://api.tu-zi.com";
+const normalizedBase = rawBaseURL.replace(/\/+$/, "");
+const endpointBase = normalizedBase.endsWith("/v1") ? normalizedBase : `${normalizedBase}/v1`;
 
 export async function runSeedreamStyleTransfer(params: {
   model: string;
@@ -37,7 +39,7 @@ export async function runSeedreamStyleTransfer(params: {
   const mime = lookupMime(params.fileName) || "image/png";
   payload.image = `data:${mime};base64,${params.buffer.toString("base64")}`;
 
-  const response = await fetch(`${baseURL}/v1/images/generations`, {
+  const response = await fetch(`${endpointBase}/images/generations`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,

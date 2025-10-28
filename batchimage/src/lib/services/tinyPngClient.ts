@@ -1,7 +1,8 @@
 const apiKey = process.env.TINIFY_API_KEY;
 
-const BASIC_AUTH =
-  apiKey && `Basic ${Buffer.from(`api:${apiKey}`).toString("base64")}`;
+const BASIC_AUTH = apiKey
+  ? `Basic ${Buffer.from(`api:${apiKey}`).toString("base64")}`
+  : "";
 
 export async function compressImageFromUrl(url: string) {
   if (!url) throw new Error("Invalid image url");
@@ -32,18 +33,59 @@ export async function compressImageFromUrl(url: string) {
     shrinkResponse.headers.get("location") ||
     shrinkResponse.headers.get("Location");
 
-  const finalResponse = downloadUrl
-    ? await fetch(downloadUrl, {
+  let finalResponse: Response | null = null;
+
+  if (downloadUrl) {
+    try {
+      const convertResponse = await fetch(downloadUrl, {
+        method: "POST",
+        headers: {
+          Authorization: BASIC_AUTH,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          convert: { type: "image/webp" },
+        }),
+      });
+
+      if (!convertResponse.ok) {
+        const errorText = await convertResponse.text();
+        console.warn("TinyPNG convert failed, falling back to shrink output", errorText);
+      } else {
+        const convertedLocation =
+          convertResponse.headers.get("location") ||
+          convertResponse.headers.get("Location");
+
+        if (convertedLocation) {
+          finalResponse = await fetch(convertedLocation, {
+            headers: { Authorization: BASIC_AUTH },
+          });
+        }
+      }
+    } catch (convertError) {
+      console.warn("TinyPNG convert error, fallback to shrink result", convertError);
+    }
+
+    if (!finalResponse) {
+      finalResponse = await fetch(downloadUrl, {
+        method: "GET",
         headers: { Authorization: BASIC_AUTH },
-      })
-    : shrinkResponse;
+      });
+    }
+  }
+
+  if (!finalResponse) {
+    finalResponse = shrinkResponse;
+  }
 
   if (!finalResponse.ok) {
     throw new Error(await finalResponse.text());
   }
 
   const finalBuffer = Buffer.from(await finalResponse.arrayBuffer());
-  const dataUrl = `data:image/png;base64,${finalBuffer.toString("base64")}`;
+  const mimeType =
+    finalResponse.headers.get("content-type")?.split(";")[0] ?? "image/webp";
+  const dataUrl = `data:${mimeType};base64,${finalBuffer.toString("base64")}`;
 
   return { url: dataUrl };
 }

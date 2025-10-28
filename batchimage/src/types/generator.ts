@@ -9,6 +9,7 @@ export interface GeneratedImage {
   id: string;
   previewUrl: string;
   promptSummary: string;
+  finalPrompt?: string;
   model: string;
   mode: GenerationMode;
   scenario?: string;
