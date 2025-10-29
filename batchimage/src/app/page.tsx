@@ -24,13 +24,13 @@ import { downloadZipBundle } from "@/utils/download";
 
 const TEXT_IMAGE_MODELS = [
   { label: "Gemini 2.5 Flash Image", value: "gemini-2.5-flash-image" },
-  { label: "Doubao Seedance", value: "doubao-seedance" },
+  { label: "Doubao Seedream 4.0", value: "doubao-seedream" },
   { label: "GPT-Image-1", value: "gpt-image-1" },
 ];
 
 const STYLE_MODELS = [
   { label: "Gemini 2.5 Flash Image", value: "gemini-2.5-flash-image" },
-  { label: "Doubao Seedance", value: "doubao-seedance" },
+  { label: "Doubao Seedream 4.0", value: "doubao-seedream" },
   { label: "GPT-Image-1", value: "gpt-image-1" },
 ];
 

@@ -19,7 +19,7 @@ const restBase = normalizedBase.endsWith("/v1") ? normalizedBase : `${normalized
 
 const MODEL_MAP: Record<string, string> = {
   "gemini-2.5-flash-image": "gemini-2.5-flash-image",
-  "doubao-seedance": "doubao-seedance-1-0-pro-250528",
+  "doubao-seedream": "doubao-seedream-4-0-250828",
   "gpt-image-1": "gpt-image-1",
 };
 
@@ -54,7 +54,7 @@ export async function generateImageFromPrompt(params: {
         prompt: params.prompt,
         n: 1,
         response_format: "url",
-        size: "1024x1024",
+        size: "2048x2048",
       }),
     });
 
