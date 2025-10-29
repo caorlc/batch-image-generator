@@ -1,6 +1,12 @@
 import { randomUUID } from "crypto";
+import { File as NodeFile } from "node:buffer";
 import { lookup as lookupMime } from "mime-types";
 import OpenAI from "openai";
+import { toFile } from "openai/uploads";
+
+if (typeof File === "undefined") {
+  (globalThis as { File?: typeof NodeFile }).File = NodeFile;
+}
 
 const apiKey =
   process.env.TUZI_API_KEY ?? process.env.GPT4O_API_KEY ?? "";
@@ -124,34 +130,24 @@ export async function editImageWithPrompt(params: {
 
   const mime = lookupMime(params.fileName) || "image/png";
 
-  const form = new FormData();
-  form.append("model", resolvedModel);
-  form.append("prompt", params.prompt);
-  form.append("response_format", "b64_json");
-  form.append(
-    "image",
-    new Blob([params.buffer], { type: mime }),
-    params.fileName
-  );
-
-  const response = await fetch(`${restBase}/images/edits`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: form,
-  });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || "GPT Image 编辑请求失败");
+  if (!client) {
+    client = new OpenAI({
+      apiKey,
+      baseURL: rawBaseURL,
+    });
   }
 
-  const payload = (await response.json()) as {
-    data?: Array<{ url?: string; b64_json?: string }>;
-  };
+  const imageFile = await toFile(params.buffer, params.fileName, { type: mime });
 
-  const data = payload.data?.[0];
+  const response = await client.images.edit({
+    model: resolvedModel,
+    prompt: params.prompt,
+    image: imageFile,
+    size: "1024x1024",
+    response_format: "b64_json",
+  });
+
+  const data = response.data?.[0];
   const url =
     data?.url ??
     (data?.b64_json

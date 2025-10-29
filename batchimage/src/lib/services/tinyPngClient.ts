@@ -52,14 +52,29 @@ export async function compressImageFromUrl(url: string) {
         const errorText = await convertResponse.text();
         console.warn("TinyPNG convert failed, falling back to shrink output", errorText);
       } else {
+        finalResponse = convertResponse;
+
         const convertedLocation =
           convertResponse.headers.get("location") ||
           convertResponse.headers.get("Location");
 
         if (convertedLocation) {
-          finalResponse = await fetch(convertedLocation, {
-            headers: { Authorization: BASIC_AUTH },
-          });
+          try {
+            const locationResponse = await fetch(convertedLocation, {
+              headers: { Authorization: BASIC_AUTH },
+            });
+
+            if (locationResponse.ok) {
+              finalResponse = locationResponse;
+            } else {
+              console.warn(
+                "TinyPNG convert location download failed, using inline response",
+                await locationResponse.text()
+              );
+            }
+          } catch (locationError) {
+            console.warn("TinyPNG convert location fetch error, using inline response", locationError);
+          }
         }
       }
     } catch (convertError) {
