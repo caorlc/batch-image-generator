@@ -5,7 +5,7 @@ import OpenAI from "openai";
 import { toFile } from "openai/uploads";
 
 if (typeof File === "undefined") {
-  (globalThis as { File?: typeof NodeFile }).File = NodeFile;
+  (globalThis as unknown as { File?: typeof NodeFile }).File = NodeFile;
 }
 
 const apiKey =

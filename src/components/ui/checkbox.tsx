@@ -2,7 +2,7 @@
 
 import { clsx } from "clsx";
 
-interface CheckboxProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange"> {
+interface CheckboxProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   onCheckedChange?: (checked: boolean) => void;
 }
