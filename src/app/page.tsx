@@ -9,6 +9,7 @@ import {
   ImageIcon,
   Loader2,
   Palette,
+  RefreshCw,
   Sparkles,
   Trash2,
   X,
@@ -193,11 +194,14 @@ export default function HomePage() {
   }, [quantity, setPlaceholderValues]);
 
   useEffect(() => {
-    if (activeTab === "style") {
+    if (activeTab === "style" || activeTab === "convert") {
       setScenarios([]);
       if (stage === "scenes-ready") {
         setStage("idle");
       }
+    }
+    if (activeTab === "text" || activeTab === "convert") {
+      setUploads([]);
     }
   }, [activeTab, stage]);
 
@@ -277,6 +281,25 @@ export default function HomePage() {
       return;
     }
 
+    if (activeTab === "convert") {
+      setStage("generating-images");
+      setScenarios([]);
+      try {
+        const generated = await runFormatConversion();
+        setImages(generated);
+        setSelectedIds(generated.map((image) => image.id));
+        setStage("ready");
+
+        // 自动开始压缩转换
+        await handleAutoCompress(generated);
+      } catch (err) {
+        console.error(err);
+        setStage("idle");
+        setError(err instanceof Error ? err.message : "格式转换失败，请稍后再试。");
+      }
+      return;
+    }
+
     setStage("generating-images");
     setScenarios([]);
     try {
@@ -350,6 +373,69 @@ export default function HomePage() {
 
     const data = (await response.json()) as { images: GeneratedImage[] };
     return data.images;
+  }
+
+  async function runFormatConversion(): Promise<GeneratedImage[]> {
+    // 将文件转换为 base64 data URL，以便后端可以访问
+    const converted = await Promise.all(
+      uploads.map(async (item) => {
+        const reader = new FileReader();
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(item.file);
+        });
+
+        return {
+          id: item.id,
+          previewUrl: dataUrl,
+          promptSummary: `转换 ${item.file.name}`,
+          model: "TinyPNG",
+          mode: "convert" as GenerationMode,
+          sourceFileName: item.file.name,
+          status: "ready" as const,
+        };
+      })
+    );
+
+    return converted;
+  }
+
+  async function handleAutoCompress(generatedImages: GeneratedImage[]) {
+    setStage("compressing");
+    setError(null);
+
+    try {
+      const response = await fetch("/api/compress", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          images: generatedImages.map((image) => ({
+            id: image.id,
+            url: image.previewUrl,
+            fileName: image.sourceFileName || `converted-${image.id}.webp`,
+          })),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const data = (await response.json()) as { images: Array<{ id: string; url: string }> };
+      setImages((prev) =>
+        prev.map((image) => {
+          const compressed = data.images.find((item) => item.id === image.id);
+          if (!compressed) return image;
+          return { ...image, compressedUrl: compressed.url, status: "compressed" };
+        })
+      );
+      setStage("compressed");
+    } catch (err) {
+      console.error(err);
+      setStage("ready");
+      setError(err instanceof Error ? err.message : "压缩转换失败，请稍后再试。");
+    }
   }
 
   async function handleCompress() {
@@ -429,9 +515,9 @@ export default function HomePage() {
       <div className="mx-auto w-full max-w-6xl px-6 py-10">
         <header className="mb-10 flex flex-col gap-4">
           <p className="text-sm font-medium text-blue-600">AI批量图片生成工具</p>
-          <h1 className="text-4xl font-semibold text-slate-900">两种工作流，一站式生成 + 风格转换</h1>
+          <h1 className="text-4xl font-semibold text-slate-900">三种工作流，一站式生成 + 转换 + 格式转换</h1>
           <p className="max-w-3xl text-base text-slate-500">
-            支持批量文本生成与批量风格转换，全流程在本地浏览器与外部 API 闭环完成，生成结果即时筛选、压缩与下载。
+            支持批量文本生成、批量风格转换与批量格式转换，全流程在本地浏览器与外部 API 闭环完成，生成结果即时筛选、压缩与下载。
           </p>
         </header>
 
@@ -459,6 +545,18 @@ export default function HomePage() {
           >
             <Palette className="h-5 w-5" />
             批量风格转换
+          </button>
+          <button
+            className={`flex flex-1 items-center gap-2 rounded-2xl border px-5 py-4 text-left text-base font-medium transition ${
+              activeTab === "convert"
+                ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
+                : "border-slate-200 bg-white text-slate-600 hover:border-blue-200"
+            }`}
+            onClick={() => setActiveTab("convert")}
+            disabled={isBusy}
+          >
+            <RefreshCw className="h-5 w-5" />
+            批量格式转换
           </button>
         </section>
 
@@ -620,7 +718,7 @@ export default function HomePage() {
                   />
                 </div>
               </div>
-            ) : (
+            ) : activeTab === "style" ? (
               <div className="mt-6 space-y-5">
                 <div className="space-y-2">
                   <label className="text-sm font-semibold text-slate-700">上传图片 (拖拽或点击)</label>
@@ -694,6 +792,64 @@ export default function HomePage() {
                   />
                 </div>
               </div>
+            ) : (
+              <div className="mt-6 space-y-5">
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-slate-700">上传图片 (拖拽或点击)</label>
+                  <Dropzone
+                    accept={{
+                      "image/png": [".png"],
+                      "image/jpeg": [".jpg", ".jpeg"],
+                    }}
+                    onDrop={(acceptedFiles) => {
+                      const next = acceptedFiles.slice(0, 20 - uploads.length).map((file) => ({
+                        id: crypto.randomUUID(),
+                        file,
+                        previewUrl: URL.createObjectURL(file),
+                      }));
+                      setUploads((prev) => [...prev, ...next]);
+                    }}
+                    multiple
+                    disabled={isBusy}
+                  >
+                    {({ getRootProps, getInputProps }) => (
+                      <div
+                        {...getRootProps()}
+                        className="flex min-h-[160px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 text-center text-sm text-slate-500 transition hover:border-blue-400 hover:bg-blue-50"
+                      >
+                        <input {...getInputProps()} />
+                        <RefreshCw className="mb-2 h-8 w-8 text-blue-500" />
+                        <p>拖拽或点击上传 PNG/JPG 图片</p>
+                        <p className="text-xs text-slate-400">最多 20 张，仅存于本地</p>
+                      </div>
+                    )}
+                  </Dropzone>
+                  {uploads.length > 0 && (
+                    <ul className="divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-slate-50">
+                      {uploads.map((item) => (
+                        <li key={item.id} className="flex items-center justify-between px-4 py-2 text-sm text-slate-600">
+                          <span className="truncate">{item.file.name}</span>
+                          <button
+                            onClick={() => handleRemoveUpload(item.id)}
+                            className="text-xs text-slate-400 transition hover:text-rose-500"
+                            disabled={isBusy}
+                          >
+                            删除
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-slate-700">
+                  <p className="font-semibold text-blue-700">格式转换说明</p>
+                  <ul className="mt-2 list-inside list-disc space-y-1 text-xs text-slate-600">
+                    <li>自动通过 TinyPNG 压缩图片</li>
+                    <li>转换为 WebP 格式，体积更小</li>
+                    <li>保持原始图片质量</li>
+                  </ul>
+                </div>
+              </div>
             )}
             <div className="mt-6">
               <Button
@@ -704,7 +860,11 @@ export default function HomePage() {
                 {(isBusy) && (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 )}
-                {activeTab === "text" ? `开始生成 (${quantity} 张)` : `开始转换 (${uploads.length} 张)`}
+                {activeTab === "text"
+                  ? `开始生成 (${quantity} 张)`
+                  : activeTab === "style"
+                  ? `开始转换 (${uploads.length} 张)`
+                  : `开始转换格式 (${uploads.length} 张)`}
               </Button>
               {error && <p className="mt-3 text-sm text-rose-500">{error}</p>}
             </div>
@@ -938,7 +1098,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        {uploads.length > 0 && activeTab === "style" && (
+        {uploads.length > 0 && (activeTab === "style" || activeTab === "convert") && (
           <div className="mt-8 flex flex-wrap items-center gap-3 text-xs text-slate-500">
             <span>已选择 {uploads.length} 个文件。</span>
             <button

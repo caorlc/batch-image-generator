@@ -10,11 +10,23 @@ export async function compressImageFromUrl(url: string) {
     return { url };
   }
 
-  const sourceResponse = await fetch(url);
-  if (!sourceResponse.ok) {
-    throw new Error("无法获取图片资源用于压缩");
+  let buffer: Buffer;
+
+  // 处理 data URL
+  if (url.startsWith("data:")) {
+    const base64Data = url.split(",")[1];
+    if (!base64Data) {
+      throw new Error("Invalid data URL format");
+    }
+    buffer = Buffer.from(base64Data, "base64");
+  } else {
+    // 处理普通 HTTP URL
+    const sourceResponse = await fetch(url);
+    if (!sourceResponse.ok) {
+      throw new Error("无法获取图片资源用于压缩");
+    }
+    buffer = Buffer.from(await sourceResponse.arrayBuffer());
   }
-  const buffer = Buffer.from(await sourceResponse.arrayBuffer());
 
   const shrinkResponse = await fetch("https://api.tinify.com/shrink", {
     method: "POST",
@@ -22,7 +34,7 @@ export async function compressImageFromUrl(url: string) {
       Authorization: BASIC_AUTH,
       "Content-Type": "application/octet-stream",
     },
-    body: buffer,
+    body: buffer as any,
   });
 
   if (!shrinkResponse.ok) {

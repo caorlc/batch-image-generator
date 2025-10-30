@@ -1,4 +1,4 @@
-export type GenerationMode = "text" | "style";
+export type GenerationMode = "text" | "style" | "convert";
 
 export interface SceneDescription {
   id: string;
