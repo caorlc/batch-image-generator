@@ -1,9 +1,4 @@
 {
   "buildCommand": "npm run build",
-  "outputDirectory": ".next",
-  "env": {
-    "TUZI_API_KEY": "@tuzi_api_key",
-    "TUZI_API_BASE": "@tuzi_api_base",
-    "TINIFY_API_KEY": "@tinify_api_key"
-  }
+  "outputDirectory": ".next"
 }
